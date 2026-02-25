@@ -5,7 +5,12 @@ import type { ProblemListItem, ConceptTag } from "@/types/problem";
 
 const DIFFICULTY_ORDER = { beginner: 0, intermediate: 1, advanced: 2 } as const;
 
-export default async function ProblemsPage() {
+export default async function ProblemsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ concept?: string }>;
+}) {
+  const { concept: initialConcept } = await searchParams;
   const session = await auth();
   const userId  = session!.user.id;
 
@@ -52,7 +57,7 @@ export default async function ProblemsPage() {
           {problems.length} problems · pick one and start coding
         </p>
       </div>
-      <ProblemsClient problems={problems} conceptTags={conceptTags} />
+      <ProblemsClient problems={problems} conceptTags={conceptTags} initialFilter={initialConcept ?? "all"} />
     </div>
   );
 }

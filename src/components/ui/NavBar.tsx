@@ -19,10 +19,10 @@ export function NavBar({ userEmail }: NavBarProps) {
 
   return (
     <header className="sticky top-0 z-50 h-14 bg-[var(--color-background)] border-b border-[var(--color-border)]">
-      <div className="max-w-6xl mx-auto h-full px-4 flex items-center justify-between">
+        <div className="max-w-6xl mx-auto h-full px-4 flex items-center gap-4">
 
         {/* Logo */}
-        <Link href="/dashboard" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+        <Link href="/dashboard" className="flex items-center gap-2 hover:opacity-80 transition-opacity shrink-0">
           <div className="w-7 h-7 rounded-md bg-[var(--color-primary)] flex items-center justify-center shrink-0">
             <span
               className="material-symbols-outlined text-[#0C0C0C] select-none"
@@ -36,8 +36,8 @@ export function NavBar({ userEmail }: NavBarProps) {
           </span>
         </Link>
 
-        {/* Nav links */}
-        <nav className="absolute left-1/2 -translate-x-1/2 hidden md:flex items-center gap-1">
+        {/* Nav links — centred */}
+        <nav className="flex-1 hidden md:flex items-center justify-center gap-1">
           {NAV_LINKS.map((link) => {
             const isActive = pathname === link.href || pathname.startsWith(link.href + "/");
             return (
@@ -58,7 +58,7 @@ export function NavBar({ userEmail }: NavBarProps) {
         </nav>
 
         {/* Right side */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 ml-auto">
           <Link
             href="/settings"
             className={[

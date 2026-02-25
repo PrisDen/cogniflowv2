@@ -5,12 +5,13 @@ import { ProblemCard } from "./ProblemCard";
 import type { ProblemListItem, ConceptTag } from "@/types/problem";
 
 interface ProblemsClientProps {
-  problems:    ProblemListItem[];
-  conceptTags: ConceptTag[];
+  problems:      ProblemListItem[];
+  conceptTags:   ConceptTag[];
+  initialFilter?: string;
 }
 
-export function ProblemsClient({ problems, conceptTags }: ProblemsClientProps) {
-  const [activeFilter, setActiveFilter] = useState<string>("all");
+export function ProblemsClient({ problems, conceptTags, initialFilter = "all" }: ProblemsClientProps) {
+  const [activeFilter, setActiveFilter] = useState<string>(initialFilter);
 
   const visible = activeFilter === "all"
     ? problems

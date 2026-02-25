@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { generateInsights } from "@/lib/insights";
+import { recalculateUserGaps } from "@/lib/gaps";
 import type { InsightEvent } from "@/lib/insights";
 
 const VALID_PREWORK = ["paper", "mind", "none"] as const;
@@ -85,6 +86,9 @@ export async function POST(
       update: { observation: positive.observation, message: positive.message },
     });
   }
+
+  // Recalculate gap stats asynchronously (don't block the response)
+  recalculateUserGaps(session.user.id, prisma).catch(console.error);
 
   return NextResponse.json({ ok: true, insightCount: (critical ? 1 : 0) + (positive ? 1 : 0) });
 }
