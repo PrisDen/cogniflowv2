@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@/generated/prisma/client";
 import type { EventType } from "@/types/session";
 
 const VALID_TYPES: EventType[] = ["first_keystroke", "paste", "snapshot", "run", "submit"];
@@ -28,7 +29,7 @@ export async function POST(
       sessionId:  id,
       type:       body.type as EventType,
       occurredAt: body.occurredAt ? new Date(body.occurredAt) : new Date(),
-      metadata:   body.metadata ?? {},
+      metadata:   (body.metadata ?? {}) as Prisma.InputJsonValue,
     },
   });
 

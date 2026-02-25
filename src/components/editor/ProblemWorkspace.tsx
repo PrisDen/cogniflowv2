@@ -8,7 +8,8 @@ import type { RunResponse } from "@/types/session";
 import { OutputPanel } from "./OutputPanel";
 
 // Monaco must be loaded client-side only
-const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false }) as any;
 
 interface ProblemWorkspaceProps {
   problem: ProblemDetail;
@@ -90,7 +91,8 @@ export function ProblemWorkspace({ problem }: ProblemWorkspaceProps) {
         }
       });
 
-      editor.onDidPaste((e: { range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number } }) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      editor.onDidPaste((e: any) => {
         const model = editor.getModel();
         if (!model) return;
         const pastedText   = model.getValueInRange(e.range);
@@ -315,8 +317,8 @@ export function ProblemWorkspace({ problem }: ProblemWorkspaceProps) {
             language="python"
             theme="vs-dark"
             value={code}
-            onChange={(val) => setCode(val ?? "")}
-            onMount={handleEditorMount as Parameters<typeof MonacoEditor>[0]["onMount"]}
+            onChange={(val: string | undefined) => setCode(val ?? "")}
+            onMount={handleEditorMount}
             options={{
               minimap:                    { enabled: false },
               suggestOnTriggerCharacters: false,
