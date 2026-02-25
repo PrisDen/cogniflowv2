@@ -90,12 +90,13 @@ export function ProblemWorkspace({ problem }: ProblemWorkspaceProps) {
         }
       });
 
-      editor.onDidPaste(() => {
+      editor.onDidPaste((e: { range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number } }) => {
         const model = editor.getModel();
         if (!model) return;
+        const pastedText   = model.getValueInRange(e.range);
         const currentLength = model.getValue().length;
         postEvent("paste", {
-          chars_pasted:              0, // Monaco onDidPaste doesn't expose length easily
+          chars_pasted:              pastedText.length,
           total_code_length_at_time: currentLength,
         });
       });
@@ -110,7 +111,7 @@ export function ProblemWorkspace({ problem }: ProblemWorkspaceProps) {
     setIsSubmitResult(false);
     setRunResult(null);
 
-    postEvent("run", { code_length: codeRef.current.length });
+    const codeAtRun = codeRef.current;
 
     try {
       const res = await fetch("/api/run", {
@@ -118,18 +119,29 @@ export function ProblemWorkspace({ problem }: ProblemWorkspaceProps) {
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({
           problemId:        problem.id,
-          code:             codeRef.current,
+          code:             codeAtRun,
           includeEdgeCases: false,
         }),
       });
       const data = await res.json() as RunResponse & { error?: string };
       if (!res.ok) {
-        setRunResult({ errorType: "RunError", errorMessage: data.error ?? "Execution failed.", allPassed: false, executionTimeMs: 0, testResults: [] });
+        const errResult = { errorType: "RunError", errorMessage: data.error ?? "Execution failed.", allPassed: false, executionTimeMs: 0, testResults: [] };
+        setRunResult(errResult);
+        postEvent("run", { code_content: codeAtRun, code_length: codeAtRun.length, error_type: "RunError", all_passed: false, passed_count: 0, total_count: 0 });
       } else {
         setRunResult(data);
+        postEvent("run", {
+          code_content:  codeAtRun,
+          code_length:   codeAtRun.length,
+          error_type:    data.errorType ?? null,
+          all_passed:    data.allPassed,
+          passed_count:  data.testResults.filter((r) => r.passed).length,
+          total_count:   data.testResults.length,
+        });
       }
     } catch {
       setRunResult({ errorType: "NetworkError", errorMessage: "Request failed.", allPassed: false, executionTimeMs: 0, testResults: [] });
+      postEvent("run", { code_content: codeAtRun, code_length: codeAtRun.length, error_type: "NetworkError", all_passed: false, passed_count: 0, total_count: 0 });
     } finally {
       setIsRunning(false);
     }
@@ -169,7 +181,16 @@ export function ProblemWorkspace({ problem }: ProblemWorkspaceProps) {
 
     // Record submit event + patch session outcome in parallel
     await Promise.allSettled([
-      postEvent("submit", { outcome, all_passed: result?.allPassed ?? false }),
+      postEvent("submit", {
+        outcome,
+        all_passed:   result?.allPassed ?? false,
+        code_content: codeRef.current,
+        code_length:  codeRef.current.length,
+        test_results: result?.testResults.map((r) => ({
+          passed:       r.passed,
+          is_edge_case: r.isEdgeCase,
+        })) ?? [],
+      }),
       sessionId && fetch(`/api/sessions/${sessionId}`, {
         method:  "PATCH",
         headers: { "Content-Type": "application/json" },
