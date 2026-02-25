@@ -1,0 +1,14 @@
+// Cogniflow — Prisma Schema
+// Full models are defined in Step 2 (database layer).
+// Connection URLs live in prisma.config.ts (Prisma 7 requirement).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Models will be added in Step 2 ──────────────────────────────────────────
