@@ -5,7 +5,7 @@ export default async function DashboardPage() {
   const name = session?.user?.name ?? session?.user?.email?.split("@")[0] ?? "there";
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="max-w-6xl mx-auto px-4 py-8 flex flex-col gap-6">
       {/* Header */}
       <div>
         <h1 className="text-2xl font-semibold text-[var(--color-text-primary)]">

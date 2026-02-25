@@ -9,7 +9,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <div className="min-h-screen bg-[var(--color-background)]">
       <NavBar userEmail={session.user.email} />
-      <main className="max-w-6xl mx-auto px-4 py-8">{children}</main>
+      <main>{children}</main>
     </div>
   );
 }
