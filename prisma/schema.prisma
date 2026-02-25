@@ -1,5 +1,4 @@
 // Cogniflow — Prisma Schema
-// Full models are defined in Step 2 (database layer).
 // Connection URLs live in prisma.config.ts (Prisma 7 requirement).
 
 generator client {
@@ -11,4 +10,186 @@ datasource db {
   provider = "postgresql"
 }
 
-// ─── Models will be added in Step 2 ──────────────────────────────────────────
+// ── Enums ─────────────────────────────────────────────────────────────────────
+
+enum DifficultyTier {
+  beginner
+  intermediate
+  advanced
+}
+
+enum SessionOutcome {
+  passed
+  failed
+  abandoned
+}
+
+enum EventType {
+  first_keystroke
+  paste
+  snapshot
+  run
+  submit
+}
+
+enum CheckinPreWork {
+  paper
+  mind
+  none
+}
+
+enum ConceptTrend {
+  improving
+  stable
+  declining
+}
+
+// ── Models ────────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email        String   @unique @db.VarChar(255)
+  passwordHash String   @map("password_hash") @db.VarChar(255)
+  displayName  String?  @map("display_name") @db.VarChar(100)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  sessions        Session[]
+  userConceptGaps UserConceptGap[]
+
+  @@map("users")
+}
+
+model ConceptTag {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug        String  @unique @db.VarChar(50)
+  label       String  @db.VarChar(100)
+  description String? @db.Text
+  sortOrder   Int     @default(0) @map("sort_order")
+
+  problemConceptTags ProblemConceptTag[]
+  userConceptGaps    UserConceptGap[]
+
+  @@map("concept_tags")
+}
+
+model Problem {
+  id                 String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title              String         @db.VarChar(255)
+  description        String         @db.Text
+  wordCount          Int            @map("word_count")
+  starterCode        String?        @map("starter_code") @db.Text
+  difficultyTier     DifficultyTier @map("difficulty_tier")
+  expectedComplexity String?        @map("expected_complexity") @db.VarChar(20)
+  isActive           Boolean        @default(true) @map("is_active")
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz
+
+  testCases          TestCase[]
+  problemConceptTags ProblemConceptTag[]
+  sessions           Session[]
+
+  @@map("problems")
+}
+
+model ProblemConceptTag {
+  problemId    String @map("problem_id") @db.Uuid
+  conceptTagId String @map("concept_tag_id") @db.Uuid
+
+  problem    Problem    @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  conceptTag ConceptTag @relation(fields: [conceptTagId], references: [id], onDelete: Restrict)
+
+  @@id([problemId, conceptTagId])
+  @@map("problem_concept_tags")
+}
+
+model TestCase {
+  id             String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  problemId      String  @map("problem_id") @db.Uuid
+  input          String  @db.Text
+  expectedOutput String  @map("expected_output") @db.Text
+  isEdgeCase     Boolean @default(false) @map("is_edge_case")
+  orderIndex     Int     @map("order_index")
+  description    String? @db.VarChar(255)
+
+  problem Problem @relation(fields: [problemId], references: [id], onDelete: Cascade)
+
+  @@unique([problemId, orderIndex])
+  @@index([problemId])
+  @@map("test_cases")
+}
+
+model Session {
+  id        String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String          @map("user_id") @db.Uuid
+  problemId String          @map("problem_id") @db.Uuid
+  startedAt DateTime        @default(now()) @map("started_at") @db.Timestamptz
+  endedAt   DateTime?       @map("ended_at") @db.Timestamptz
+  outcome   SessionOutcome?
+
+  // Post-session check-in — all nullable until submitted
+  checkinFeel        Int?            @map("checkin_feel")
+  checkinPreWork     CheckinPreWork? @map("checkin_pre_work")
+  checkinInterrupted Boolean?        @map("checkin_interrupted")
+  checkinConfidence  Int?            @map("checkin_confidence")
+  checkinCompletedAt DateTime?       @map("checkin_completed_at") @db.Timestamptz
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  problem Problem @relation(fields: [problemId], references: [id], onDelete: Restrict)
+
+  events   SessionEvent[]
+  insights SessionInsight[]
+
+  @@index([userId])
+  @@index([problemId])
+  @@index([userId, problemId])
+  @@map("sessions")
+}
+
+model SessionEvent {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId  String    @map("session_id") @db.Uuid
+  type       EventType
+  occurredAt DateTime  @map("occurred_at") @db.Timestamptz
+  metadata   Json      @default("{}")
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([sessionId, type])
+  @@map("session_events")
+}
+
+model SessionInsight {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId   String   @map("session_id") @db.Uuid
+  priority    Int      // 1 = critical, 2 = positive; @@unique enforces max 2 per session
+  observation String   @db.VarChar(50)
+  message     String   @db.Text
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, priority])
+  @@index([sessionId])
+  @@map("session_insights")
+}
+
+model UserConceptGap {
+  id                   String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId               String       @map("user_id") @db.Uuid
+  conceptTagId         String       @map("concept_tag_id") @db.Uuid
+  sessionsAttempted    Int          @default(0) @map("sessions_attempted")
+  avgErrorCount        Float?       @map("avg_error_count")
+  avgSessionMinutes    Float?       @map("avg_session_minutes")
+  userOverallAvgErrors  Float?      @map("user_overall_avg_errors")
+  userOverallAvgMinutes Float?      @map("user_overall_avg_minutes")
+  trend                ConceptTrend?
+  lastUpdated          DateTime     @default(now()) @map("last_updated") @db.Timestamptz
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conceptTag ConceptTag @relation(fields: [conceptTagId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, conceptTagId])
+  @@index([userId])
+  @@map("user_concept_gaps")
+}
