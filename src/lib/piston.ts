@@ -8,7 +8,12 @@ import type { TestCaseResult } from "@/types/session";
  * Judge0 CE's public endpoint has no auth requirement.
  */
 
-const JUDGE0_URL   = process.env.JUDGE0_API_URL ?? "https://ce.judge0.com";
+// If JUDGE0_API_KEY is set, use the RapidAPI endpoint (reliable, key-gated).
+// Otherwise fall back to the public ce.judge0.com endpoint (unreliable from cloud IPs).
+const JUDGE0_API_KEY = process.env.JUDGE0_API_KEY ?? "";
+const JUDGE0_URL     = process.env.JUDGE0_API_URL
+  ?? (JUDGE0_API_KEY ? "https://judge0-ce.p.rapidapi.com" : "https://ce.judge0.com");
+
 const PYTHON_LANG  = 100; // Python 3.12.5
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -128,11 +133,17 @@ async function executeViaJudge0(code: string): Promise<{
 }> {
   const start = Date.now();
 
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (JUDGE0_API_KEY) {
+    headers["X-RapidAPI-Key"]  = JUDGE0_API_KEY;
+    headers["X-RapidAPI-Host"] = "judge0-ce.p.rapidapi.com";
+  }
+
   let res: Response;
   try {
     res = await fetch(`${JUDGE0_URL}/submissions?base64_encoded=false&wait=true`, {
       method:  "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({
         source_code: code,
         language_id: PYTHON_LANG,

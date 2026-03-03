@@ -50,7 +50,7 @@ export async function POST(req: Request) {
   } catch (e) {
     console.error("[/api/run] error:", e);
     const msg = e instanceof Error ? e.message : "Unknown error";
-    if (msg === "JUDGE0_UNREACHABLE" || msg === "PISTON_UNREACHABLE") {
+    if (msg === "JUDGE0_UNREACHABLE" || msg === "PISTON_UNREACHABLE" || msg === "JUDGE0_ERROR") {
       return NextResponse.json({ error: "Code runner is temporarily unavailable. Try again in a moment." }, { status: 503 });
     }
     return NextResponse.json({ error: "Execution failed." }, { status: 500 });
