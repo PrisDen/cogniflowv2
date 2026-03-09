@@ -30,6 +30,11 @@ enum EventType {
   snapshot
   run
   submit
+  // Engagement telemetry (activity tracker)
+  window_focus
+  window_blur
+  problem_scroll
+  editor_activity
 }
 
 enum CheckinPreWork {
@@ -133,6 +138,13 @@ model Session {
   checkinConfidence  Int?            @map("checkin_confidence")
   checkinCompletedAt DateTime?       @map("checkin_completed_at") @db.Timestamptz
 
+  // Gap-model baselines: user's overall averages computed from sessions that
+  // finished BEFORE this one. Null for sessions recorded before baseline
+  // tracking was introduced; recalculateUserGaps handles these via dynamic
+  // computation from the chronologically-sorted session list.
+  baselineAvgErrors  Float? @map("baseline_avg_errors")
+  baselineAvgMinutes Float? @map("baseline_avg_minutes")
+
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   problem Problem @relation(fields: [problemId], references: [id], onDelete: Restrict)
 
@@ -165,6 +177,9 @@ model SessionInsight {
   priority    Int      // 1 = critical, 2 = positive; @@unique enforces max 2 per session
   observation String   @db.VarChar(50)
   message     String   @db.Text
+  /** Stores evidence signals computed when the insight fired. Null for sessions
+   *  recorded before this column was introduced — UI handles gracefully. */
+  metadata    Json?    @default("{}")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
@@ -179,8 +194,13 @@ model UserConceptGap {
   userId               String       @map("user_id") @db.Uuid
   conceptTagId         String       @map("concept_tag_id") @db.Uuid
   sessionsAttempted    Int          @default(0) @map("sessions_attempted")
+  // avgErrorCount / avgSessionMinutes store pre-computed RATIOS (concept/baseline),
+  // not raw averages. Each ratio is a weighted mean of per-session normalised values
+  // anchored to the rolling user baseline at the time each session occurred.
   avgErrorCount        Float?       @map("avg_error_count")
   avgSessionMinutes    Float?       @map("avg_session_minutes")
+  // Reference copy of the latest overall averages — informational only, not
+  // used in gap classification.
   userOverallAvgErrors  Float?      @map("user_overall_avg_errors")
   userOverallAvgMinutes Float?      @map("user_overall_avg_minutes")
   trend                ConceptTrend?

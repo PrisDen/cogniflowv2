@@ -1,4 +1,14 @@
-export type EventType = "first_keystroke" | "paste" | "snapshot" | "run" | "submit";
+export type EventType =
+  | "first_keystroke"
+  | "paste"
+  | "snapshot"
+  | "run"
+  | "submit"
+  // Engagement telemetry (introduced with activity-tracker instrumentation)
+  | "window_focus"
+  | "window_blur"
+  | "problem_scroll"
+  | "editor_activity";
 
 export interface TestCaseResult {
   testCaseId:   string;
