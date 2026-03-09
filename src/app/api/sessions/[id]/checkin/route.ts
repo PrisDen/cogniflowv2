@@ -70,20 +70,23 @@ export async function POST(
 
   const { critical, positive } = generateInsights(insightInput);
 
-  // Save insights (upsert so re-submitting check-in is safe)
+  // Save insights (upsert so re-submitting check-in is safe).
+  // metadata stores evidence signals so the reflection UI can display them.
   if (critical) {
+    const metadata = critical.evidence ? { evidence: critical.evidence } : {};
     await prisma.sessionInsight.upsert({
       where:  { sessionId_priority: { sessionId: id, priority: 1 } },
-      create: { sessionId: id, priority: 1, observation: critical.observation, message: critical.message },
-      update: { observation: critical.observation, message: critical.message },
+      create: { sessionId: id, priority: 1, observation: critical.observation, message: critical.message, metadata },
+      update: { observation: critical.observation, message: critical.message, metadata },
     });
   }
 
   if (positive) {
+    const metadata = positive.evidence ? { evidence: positive.evidence } : {};
     await prisma.sessionInsight.upsert({
       where:  { sessionId_priority: { sessionId: id, priority: 2 } },
-      create: { sessionId: id, priority: 2, observation: positive.observation, message: positive.message },
-      update: { observation: positive.observation, message: positive.message },
+      create: { sessionId: id, priority: 2, observation: positive.observation, message: positive.message, metadata },
+      update: { observation: positive.observation, message: positive.message, metadata },
     });
   }
 

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { BEHAVIOR_FOCUS } from "@/lib/insights";
 
 // ── Observation display metadata ──────────────────────────────────────────
 
@@ -21,16 +22,51 @@ const OBSERVATION_LABELS: Record<string, { label: string; icon: string }> = {
   print_debugging:    { label: "Print-based debugging",    icon: "terminal" },
 };
 
+// ── Types ─────────────────────────────────────────────────────────────────
+
+type GapStatus = "gap" | "developing" | "strong";
+
+interface ConceptContext {
+  conceptSlug: string;
+  status: GapStatus;
+}
+
+interface InsightCardData {
+  observation:    string;
+  message:        string;
+  evidence?:      Record<string, unknown>;
+  behaviorFocus?: string;
+  conceptContext?: ConceptContext;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+
+/** Determine gap status from pre-aggregated ratio fields on UserConceptGap. */
+function ratioToStatus(avgErrors: number | null, avgMinutes: number | null): GapStatus {
+  const errorRatio  = avgErrors  ?? 1;
+  const minuteRatio = avgMinutes ?? 1;
+  if (errorRatio > 1.8 || minuteRatio > 1.8) return "gap";
+  if (errorRatio > 1.0 || minuteRatio > 1.0) return "developing";
+  return "strong";
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────
 
 export default async function ReflectionPage({ params }: { params: Promise<{ id: string }> }) {
   const { id }   = await params;
   const session  = await auth();
+  const userId   = session!.user.id;
 
   const record = await prisma.session.findFirst({
-    where: { id, userId: session!.user.id },
+    where: { id, userId },
     include: {
-      problem:  { select: { id: true, title: true } },
+      problem: {
+        select: {
+          id: true,
+          title: true,
+          problemConceptTags: { include: { conceptTag: { select: { slug: true } } } },
+        },
+      },
       insights: { orderBy: { priority: "asc" } },
       events:   { select: { type: true }, where: { type: "run" } },
     },
@@ -38,12 +74,54 @@ export default async function ReflectionPage({ params }: { params: Promise<{ id:
 
   if (!record) notFound();
 
+  // Fetch the user's current gap state for each concept tag on this problem.
+  const conceptSlugs = record.problem.problemConceptTags.map((t) => t.conceptTag.slug);
+  const gapRows = conceptSlugs.length > 0
+    ? await prisma.userConceptGap.findMany({
+        where: {
+          userId,
+          conceptTag: { slug: { in: conceptSlugs } },
+        },
+        include: { conceptTag: { select: { slug: true } } },
+      })
+    : [];
+
+  const gapStatusBySlug = new Map<string, GapStatus>(
+    gapRows.map((g) => [g.conceptTag.slug, ratioToStatus(g.avgErrorCount, g.avgSessionMinutes)]),
+  );
+
+  // Pick the most severe concept context (gap > developing; skip strong).
+  function pickConceptContext(): ConceptContext | undefined {
+    const relevant = conceptSlugs
+      .map((slug) => ({ conceptSlug: slug, status: gapStatusBySlug.get(slug) ?? "strong" }))
+      .filter((c) => c.status === "gap" || c.status === "developing");
+    if (relevant.length === 0) return undefined;
+    return relevant.find((c) => c.status === "gap") ?? relevant[0];
+  }
+
+  const sharedConceptContext = pickConceptContext();
+
+  // Build enriched insight objects from stored DB rows.
+  function enrichInsight(raw: { observation: string; message: string; metadata: unknown }): InsightCardData {
+    const stored = (raw.metadata ?? {}) as Record<string, unknown>;
+    const evidence = stored.evidence as Record<string, unknown> | undefined;
+    return {
+      observation:    raw.observation,
+      message:        raw.message,
+      evidence,
+      behaviorFocus:  BEHAVIOR_FOCUS[raw.observation],
+      conceptContext: sharedConceptContext,
+    };
+  }
+
   const durationMin = record.endedAt
     ? Math.round((record.endedAt.getTime() - record.startedAt.getTime()) / 60_000)
     : null;
 
-  const critical = record.insights.find((i) => i.priority === 1);
-  const positive = record.insights.find((i) => i.priority === 2);
+  const rawCritical = record.insights.find((i) => i.priority === 1);
+  const rawPositive = record.insights.find((i) => i.priority === 2);
+  const critical    = rawCritical ? enrichInsight(rawCritical) : null;
+  const positive    = rawPositive ? enrichInsight(rawPositive) : null;
   const hasInsights = critical || positive;
 
   return (
@@ -79,12 +157,8 @@ export default async function ReflectionPage({ params }: { params: Promise<{ id:
             Your reflection
           </p>
 
-          {critical && (
-            <InsightCard insight={critical} isCritical />
-          )}
-          {positive && (
-            <InsightCard insight={positive} isCritical={false} />
-          )}
+          {critical && <InsightCard insight={critical} isCritical />}
+          {positive && <InsightCard insight={positive} isCritical={false} />}
         </div>
       ) : (
         <div className="p-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]">
@@ -141,36 +215,120 @@ function OutcomeBadge({ outcome }: { outcome: string | null }) {
   );
 }
 
-function InsightCard({
-  insight,
-  isCritical,
-}: {
-  insight: { observation: string; message: string };
-  isCritical: boolean;
-}) {
-  const meta = OBSERVATION_LABELS[insight.observation] ?? { label: insight.observation, icon: "info" };
+// ── InsightCard ───────────────────────────────────────────────────────────
+
+function InsightCard({ insight, isCritical }: { insight: InsightCardData; isCritical: boolean }) {
+  const meta       = OBSERVATION_LABELS[insight.observation] ?? { label: insight.observation, icon: "info" };
+  const accentText = isCritical ? "text-[var(--color-primary)]" : "text-[#4ADE80]";
+  const border     = isCritical
+    ? "border-[rgba(167,139,250,0.2)] bg-[rgba(167,139,250,0.04)]"
+    : "border-[rgba(74,222,128,0.15)] bg-[rgba(74,222,128,0.04)]";
 
   return (
-    <div className={[
-      "p-4 rounded-xl border flex flex-col gap-3",
-      isCritical
-        ? "border-[rgba(167,139,250,0.2)] bg-[rgba(167,139,250,0.04)]"
-        : "border-[rgba(74,222,128,0.15)] bg-[rgba(74,222,128,0.04)]",
-    ].join(" ")}>
+    <div className={`p-4 rounded-xl border flex flex-col gap-4 ${border}`}>
+      {/* ── Label row ── */}
       <div className="flex items-center gap-2">
         <span
-          className={`material-symbols-outlined text-sm ${isCritical ? "text-[var(--color-primary)]" : "text-[#4ADE80]"}`}
+          className={`material-symbols-outlined ${accentText}`}
           style={{ fontSize: "18px", fontVariationSettings: "'FILL' 1" }}
         >
           {meta.icon}
         </span>
-        <span className={`text-xs font-semibold uppercase tracking-wide ${isCritical ? "text-[var(--color-primary)]" : "text-[#4ADE80]"}`}>
+        <span className={`text-xs font-semibold uppercase tracking-wide ${accentText}`}>
           {meta.label}
         </span>
       </div>
+
+      {/* 1 — Insight message */}
       <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">
         {insight.message}
       </p>
+
+      {/* 2 — Evidence (only for sessions that have it stored) */}
+      {insight.evidence && <EvidencePanel evidence={insight.evidence} />}
+
+      {/* 3 — Concept context */}
+      {insight.conceptContext && <ConceptContextPanel context={insight.conceptContext} />}
+
+      {/* 4 — Next session focus */}
+      {insight.behaviorFocus && <BehaviorFocusPanel focus={insight.behaviorFocus} />}
+    </div>
+  );
+}
+
+// ── EvidencePanel ─────────────────────────────────────────────────────────
+
+/** Convert camelCase key to spaced lower-case words: "syntaxRuns" → "syntax runs" */
+function camelToWords(key: string): string {
+  return key.replace(/([A-Z])/g, " $1").toLowerCase().trim();
+}
+
+function EvidencePanel({ evidence }: { evidence: Record<string, unknown> }) {
+  const entries = Object.entries(evidence);
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+        Evidence
+      </span>
+      <ul className="flex flex-col gap-1">
+        {entries.map(([key, value]) => (
+          <li key={key} className="flex items-baseline gap-2 text-xs text-[var(--color-text-secondary)]">
+            <span className="text-[var(--color-text-muted)]">•</span>
+            <span>
+              <span className="text-[var(--color-text-primary)]">{camelToWords(key)}:</span>
+              {" "}{String(value)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// ── ConceptContextPanel ───────────────────────────────────────────────────
+
+const GAP_STATUS_STYLES: Record<GapStatus, string> = {
+  gap:        "text-[#F87171]",
+  developing: "text-[#FB923C]",
+  strong:     "text-[#4ADE80]",
+};
+
+function ConceptContextPanel({ context }: { context: ConceptContext }) {
+  return (
+    <div className="flex flex-col gap-1 pt-1 border-t border-[var(--color-border)]">
+      <p className="text-xs text-[var(--color-text-secondary)]">
+        This problem involves:{" "}
+        <span className="text-[var(--color-text-primary)] font-medium">{context.conceptSlug}</span>
+      </p>
+      <p className="text-xs text-[var(--color-text-secondary)]">
+        Your current gap status:{" "}
+        <span className={`font-semibold ${GAP_STATUS_STYLES[context.status]}`}>
+          {context.status}
+        </span>
+      </p>
+    </div>
+  );
+}
+
+// ── BehaviorFocusPanel ────────────────────────────────────────────────────
+
+function BehaviorFocusPanel({ focus }: { focus: string }) {
+  return (
+    <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-[rgba(167,139,250,0.08)] border border-[rgba(167,139,250,0.15)]">
+      <span
+        className="material-symbols-outlined text-[var(--color-primary)] shrink-0 mt-0.5"
+        style={{ fontSize: "14px", fontVariationSettings: "'FILL' 1" }}
+      >
+        flag
+      </span>
+      <div className="flex flex-col gap-0.5">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-primary)]">
+          Next session focus
+        </span>
+        <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">{focus}</p>
+      </div>
     </div>
   );
 }
