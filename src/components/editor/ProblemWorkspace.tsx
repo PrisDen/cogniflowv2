@@ -4,7 +4,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import type { ProblemDetail } from "@/types/problem";
-import type { RunResponse } from "@/types/session";
+import type { EventType, RunResponse } from "@/types/session";
+import { enqueue, startEventQueue, type EventQueueController } from "@/lib/eventQueue";
 import { OutputPanel } from "./OutputPanel";
 
 // Monaco must be loaded client-side only
@@ -28,10 +29,14 @@ export function ProblemWorkspace({ problem }: ProblemWorkspaceProps) {
   const [showTestCases, setShowTestCases] = useState(false);
   const [resetConfirm, setResetConfirm] = useState(false);
 
-  const codeRef            = useRef(code);
-  const firstKeystrokeFired = useRef(false);
-  const editorRef          = useRef<unknown>(null);
-  codeRef.current          = code;
+  const codeRef               = useRef(code);
+  const firstKeystrokeFired   = useRef(false);
+  const editorRef             = useRef<unknown>(null);
+  const queueRef              = useRef<EventQueueController | null>(null);
+  const problemPanelRef       = useRef<HTMLDivElement | null>(null);
+  const lastEditorActivityRef = useRef(0); // ms timestamp of last editor_activity enqueue
+  const lastScrollRef         = useRef(0); // ms timestamp of last problem_scroll enqueue
+  codeRef.current             = code;
 
   // ── Create session on mount ──────────────────────────────────────────────
   useEffect(() => {
@@ -51,6 +56,30 @@ export function ProblemWorkspace({ problem }: ProblemWorkspaceProps) {
     return () => clearInterval(interval);
   }, []);
 
+  // ── Event queue — start when session is ready, flush on visibility hide ──
+  useEffect(() => {
+    if (!sessionId) return;
+    const controller = startEventQueue(sessionId);
+    queueRef.current = controller;
+    return () => {
+      controller.stop();
+      queueRef.current = null;
+    };
+  }, [sessionId]);
+
+  // ── Window focus / blur ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (!sessionId) return;
+    const onFocus = () => enqueue(sessionId, "window_focus", {});
+    const onBlur  = () => enqueue(sessionId, "window_blur",  {});
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur",  onBlur);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur",  onBlur);
+    };
+  }, [sessionId]);
+
   // ── Snapshot every 30 seconds ────────────────────────────────────────────
   useEffect(() => {
     if (!sessionId) return;
@@ -65,21 +94,31 @@ export function ProblemWorkspace({ problem }: ProblemWorkspaceProps) {
 
   // ── Helpers ──────────────────────────────────────────────────────────────
   const postEvent = useCallback(
-    (type: string, metadata: Record<string, unknown> = {}) => {
+    (type: EventType, metadata: Record<string, unknown> = {}) => {
       if (!sessionId) return;
-      fetch(`/api/sessions/${sessionId}/events`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ type, occurredAt: new Date().toISOString(), metadata }),
-      }).catch(console.error);
+      enqueue(sessionId, type, metadata);
     },
     [sessionId],
   );
 
   // ── Editor mount ─────────────────────────────────────────────────────────
   const handleEditorMount = useCallback(
-    (editor: { onDidChangeModelContent: (cb: (e: { isFlush: boolean; changes: Array<{ text: string }> }) => void) => void; onDidPaste: (cb: (e: { range: { startLineNumber: number } }) => void) => void; getModel: () => { getValue: () => string; getValueInRange: (r: { startLineNumber: number }) => string } | null }) => {
+    (editor: {
+      onDidChangeModelContent:   (cb: (e: { isFlush: boolean; changes: Array<{ text: string }> }) => void) => void;
+      onDidChangeCursorPosition: (cb: (e: unknown) => void) => void;
+      onDidPaste:                (cb: (e: { range: { startLineNumber: number } }) => void) => void;
+      getModel: () => { getValue: () => string; getValueInRange: (r: { startLineNumber: number }) => string } | null;
+    }) => {
       editorRef.current = editor;
+
+      // Shared throttle: emit editor_activity at most once every 5 seconds.
+      const fireEditorActivity = () => {
+        const now = Date.now();
+        if (now - lastEditorActivityRef.current >= 5_000) {
+          lastEditorActivityRef.current = now;
+          postEvent("editor_activity", {});
+        }
+      };
 
       editor.onDidChangeModelContent((e) => {
         if (!firstKeystrokeFired.current && !e.isFlush) {
@@ -89,6 +128,11 @@ export function ProblemWorkspace({ problem }: ProblemWorkspaceProps) {
             postEvent("first_keystroke");
           }
         }
+        fireEditorActivity();
+      });
+
+      editor.onDidChangeCursorPosition(() => {
+        fireEditorActivity();
       });
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -129,10 +173,11 @@ export function ProblemWorkspace({ problem }: ProblemWorkspaceProps) {
       if (!res.ok) {
         const errResult = { errorType: "RunError", errorMessage: data.error ?? "Execution failed.", allPassed: false, executionTimeMs: 0, testResults: [] };
         setRunResult(errResult);
-        postEvent("run", { code_content: codeAtRun, code_length: codeAtRun.length, error_type: "RunError", all_passed: false, passed_count: 0, total_count: 0 });
+        postEvent("run", { runType: "run", code_content: codeAtRun, code_length: codeAtRun.length, error_type: "RunError", all_passed: false, passed_count: 0, total_count: 0 });
       } else {
         setRunResult(data);
         postEvent("run", {
+          runType:       "run",
           code_content:  codeAtRun,
           code_length:   codeAtRun.length,
           error_type:    data.errorType ?? null,
@@ -143,9 +188,11 @@ export function ProblemWorkspace({ problem }: ProblemWorkspaceProps) {
       }
     } catch {
       setRunResult({ errorType: "NetworkError", errorMessage: "Request failed.", allPassed: false, executionTimeMs: 0, testResults: [] });
-      postEvent("run", { code_content: codeAtRun, code_length: codeAtRun.length, error_type: "NetworkError", all_passed: false, passed_count: 0, total_count: 0 });
+      postEvent("run", { runType: "run", code_content: codeAtRun, code_length: codeAtRun.length, error_type: "NetworkError", all_passed: false, passed_count: 0, total_count: 0 });
     } finally {
       setIsRunning(false);
+      // Eagerly flush after every run so gap-analysis data reaches the server promptly.
+      void queueRef.current?.flushNow();
     }
   }, [isRunning, isSubmitting, postEvent, problem.id]);
 
@@ -181,18 +228,22 @@ export function ProblemWorkspace({ problem }: ProblemWorkspaceProps) {
 
     const outcome = result?.allPassed ? "passed" : "failed";
 
-    // Record submit event + patch session outcome in parallel
+    // Enqueue the submit event, then flush the entire queue and patch the
+    // session record in parallel. Awaiting here ensures the submit event
+    // reaches the server before we redirect to check-in.
+    postEvent("submit", {
+      runType:      "submit",
+      outcome,
+      all_passed:   result?.allPassed ?? false,
+      code_content: codeRef.current,
+      code_length:  codeRef.current.length,
+      test_results: result?.testResults.map((r) => ({
+        passed:       r.passed,
+        is_edge_case: r.isEdgeCase,
+      })) ?? [],
+    });
     await Promise.allSettled([
-      postEvent("submit", {
-        outcome,
-        all_passed:   result?.allPassed ?? false,
-        code_content: codeRef.current,
-        code_length:  codeRef.current.length,
-        test_results: result?.testResults.map((r) => ({
-          passed:       r.passed,
-          is_edge_case: r.isEdgeCase,
-        })) ?? [],
-      }),
+      queueRef.current?.flushNow() ?? Promise.resolve(),
       sessionId && fetch(`/api/sessions/${sessionId}`, {
         method:  "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -221,7 +272,21 @@ export function ProblemWorkspace({ problem }: ProblemWorkspaceProps) {
   return (
     <div className="h-[calc(100vh-3.5rem)] flex overflow-hidden">
       {/* ── Left column — Problem ──────────────────────────────────────────── */}
-      <div className="w-[42%] shrink-0 flex flex-col border-r border-[var(--color-border)] overflow-y-auto">
+      <div
+        ref={problemPanelRef}
+        className="w-[42%] shrink-0 flex flex-col border-r border-[var(--color-border)] overflow-y-auto"
+        onScroll={(e) => {
+          const now = Date.now();
+          if (now - lastScrollRef.current < 3_000) return;
+          lastScrollRef.current = now;
+          const el = e.currentTarget;
+          postEvent("problem_scroll", {
+            scrollTop:    Math.round(el.scrollTop),
+            scrollHeight: el.scrollHeight,
+            clientHeight: el.clientHeight,
+          });
+        }}
+      >
         <div className="p-5 flex flex-col gap-4">
           {/* Header */}
           <div>
